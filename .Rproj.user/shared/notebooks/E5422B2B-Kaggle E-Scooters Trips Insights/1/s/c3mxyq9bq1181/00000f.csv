@@ -1,0 +1,5 @@
+"0","data=read.csv(here(""data/E-Scooter_Trips_-_2020.csv""))"
+"0",""
+"0","data$Trip.Duration = gsub("","","""",data$Trip.Duration) |> as.numeric() |>as.duration()  |> as.numeric()"
+"0",""
+"0","data$Trip.Distance = gsub("","","""",data$Trip.Distance) |> as.numeric()"

@@ -1,0 +1,278 @@
+---
+title: "Kaggle Costumer Cluster"
+author: "Romario"
+date: "2023-03-21"
+output:
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(
+   warning=FALSE, message=FALSE, tidy=TRUE,	tidy.opts=list(arrow=TRUE,	indent=2),fig.width = 6, fig.align = 'center', fig.asp=0.618, out.width = '100%')
+```
+
+# Introdução
+
+O conjunto de dados foi retirado do [Kaggle](https://www.kaggle.com/datasets/whenamancodes/customer-personality-analysis) e pretende agrupar os clientes de forma que ajudem o grupo de marketing em suas campanhas
+
+## Bibliotecas
+```{r library}
+library(tidyverse)
+library(here)
+library(DT)
+library(cluster)
+library(factoextra)
+library("ggsci")
+library(cluster)
+library('RVAideMemoire')
+library(flextable)
+library(rstatix)
+
+```
+
+## Dataset Informations
+```{r}
+data=read_tsv(here('data/marketing_campaign.csv'))
+DT::datatable(data, options = list(searching = FALSE,pageLength = 5,lengthMenu = c(5, 10, 15, 20), scrollX = T))
+```
+
+## Tratando os dados
+```{r}
+data=na.omit(data)
+
+
+change_to_factors=c("Complain","AcceptedCmp1", "AcceptedCmp2", 'AcceptedCmp3', 'AcceptedCmp4',
+                    'AcceptedCmp5','Education','Marital_Status',"Year_Birth","Response")
+
+data_to_change = data
+
+data_to_change[change_to_factors] =lapply(data_to_change[change_to_factors],as.factor)
+data_to_change[change_to_factors] = lapply(data_to_change[change_to_factors],unclass) #transforma os fatores em numeros
+
+rm(change_to_factors)
+
+#Assume que esses dados não são relevantes
+data_selected_columns= data_to_change |> dplyr::select(!c('ID','Dt_Customer','Z_CostContact',"Z_Revenue"))
+rm(data_to_change)
+
+data |> 
+  summarise_all(list(~is.na(.))) |> 
+  pivot_longer(everything(),
+               names_to = "variables", values_to="missing") |> 
+  count(variables, missing) |> 
+  ggplot(aes(y=variables,x=n,fill=missing))+
+  geom_col() +
+  xlab("") +
+  scale_fill_jco() +
+  labs(caption="Code Source for this plot: https://datavizpyr.com/visualizing-missing-data-with-barplot-in-r/ ") +
+  theme(
+    plot.caption=element_text(hjust=-1.2,size=6.5)
+  )
+```
+
+## Construindo o modelo de clusterização
+
+
+Escolhi o algoritmo [`Clara`](http://wiki.icmc.usp.br/images/a/a8/CLARANS_DiegoAmancio.pdf), pois ele trabalha bem com grandes bancos de dados.
+
+
+```{r}
+# O banco de dados deve ser normalizado
+data_selected_columns_scaled = apply(as.matrix(data_selected_columns),2,as.numeric) |> scale()
+
+rm(data_selected_columns)
+
+```
+
+O gráfico auxilia na escolha do número de clusters ou grupos.
+```{r}
+fviz_nbclust(data_selected_columns_scaled, clara, method = "silhouette")+
+  theme_classic()
+```
+
+Agrupando os clientes
+```{r}
+clara_cluster_for_data<- clara(data_selected_columns_scaled, 2, samples = 50, pamLike = TRUE)
+
+customers_types= fviz_cluster(clara_cluster_for_data,
+             palette = 'jco',
+             ellipse.type = "t", 
+             geom = "point", pointsize = 1,
+             ggtheme = theme_classic(),
+             main="Customers Types"
+)
+
+customers_types
+
+#Unindo a segmentação com o banco de dados originais
+dataset=(cbind(data, cluster = clara_cluster_for_data$cluster))
+```
+
+
+## Analisando os clientes
+
+### Renda
+A equipe de marketing precisa bater suas metas. Perceberam que dividi os grupos entre 1 e 2. Então me pediram para analisar quais dos dois grupos possuem os clientes com maior renda.
+
+Aparentemente eles querem focar nos ricaços.
+
+
+```{r}
+dataset |>
+  ggplot() +
+  geom_boxplot(aes(x = as.factor(cluster), y = Income, fill = as.factor(cluster))) +
+  labs(x = "",
+       y = "",
+       title = "Income by Group",
+       subtitle = "All costumers",
+       fill="Groups"
+       ) + 
+  scale_fill_jco()
+  
+```
+
+O gráfico de caixa mostra como se espalha a renda anual entre os clientes. Parece haver diferença entre a mediana dos dois grupos. Entretanto, o grupo de marketing não está convencido. Devo utilizar outra visualização?
+
+
+```{r}
+dataset |>
+  ggplot(aes(x = as.factor(cluster), y = Income, fill = as.factor(cluster))) +
+  geom_violin() +
+  labs(x = "Group",
+       y = "Annual Income",
+       title = "Income by Group",
+       subtitle= "Between 10%-90% of customers"
+       ) + 
+  scale_fill_jco()+
+  theme(legend.position = "none") +
+  scale_y_continuous(limits = quantile(dataset$Income,c(0.1, 0.9))) 
+```
+
+Opa! Agora sim! Escolhendo os valores entre 10 e 90 quartis, eu pude provar para o grupo de marketing uma não apenas uma diferença na mediana de renda, como a maioria dos clientes do grupo 1 tem altos salários e do grupo dois são pessoas comuns.
+
+O marketing sai feliz da sala e me dá tapas nas costas. Mas me bateu uma culpa. Será que *REALMENTE* tem diferenças entre os grupos? Para isso é necessário realizar teste de hipóteses e avaliar suas premissas.
+
+### A Renda é realmente diferente?
+
+A solução é a realização de um teste t ou wilcox. Para saber qual utilizar e é necessário avaliar se estados estão em uma distribuição normal.
+
+Isto pode ser verificado utilizando o teste de Shapiro-Wilk. Se indicar normalidade, hipótese nula, usaremos o teste t que irá comparar a média da Renda. Em casos não haja normalidade, usaremos a wilcox que compara as medianas.
+
+
+```{r}
+byf.shapiro(Income ~cluster, data=dataset)
+```
+
+O p < 0,05, nos faz descartar a hipótese nula, ou seja, iremos comparar a mediana.
+
+```{r}
+wilcox.test(Income ~ cluster, data = dataset)
+```
+
+Sim! As duas medianas são diferentes! Ufa, não fiz o marketing perder tempo.
+
+```{r}
+dataset |>
+  group_by(cluster) |>
+  get_summary_stats(Income, type = "median_iqr") |>
+  flextable() |>
+  set_header_labels(cluster = "Grupo", variable = "Variavél", n = "Quantidade",
+                    median = "Mediana", iqr = "IIQ")
+```
+
+## O que vender
+
+A equipe marketing voltou… Ok, eles sabem haver uma diferença de ganhos entre os grupos, mas mesmo assim, tem diferença entre no que eles gastam?
+
+Então eles me informaram que estão com campanhas no setor de: vinho, frutas e ouro.
+
+Para analisar iremos refazer os de normalidade de comparar as medianas
+
+
+### Vinho
+```{r}
+byf.shapiro(MntWines ~cluster, data=dataset) #Os dados não são normais
+
+wilcox.test(MntWines ~ cluster, data = dataset) #A renda entre os dois gupos não é normal
+
+dunn_test(MntWines ~ cluster, data = dataset, p.adjust.method = "bonferroni")
+
+dataset |>
+  group_by(cluster) |>
+  get_summary_stats(MntWines, type = "median_iqr") |>
+  flextable() |>
+  set_header_labels(cluster = "Grupo", variable = "Variavél", n = "Quantidade",
+                    median = "Mediana", iqr = "IIQ")
+```
+</br>
+O grupo 1 gastou mais com vinhos.
+
+### Frutas
+
+```{r}
+byf.shapiro(MntFruits ~cluster, data=dataset) #Os dados não são normais
+
+wilcox.test(MntFruits~ cluster, data = dataset) #A renda entre os dois gupos não é normal
+
+
+dataset |>
+  group_by(cluster) |>
+  get_summary_stats(MntFruits, type = "median_iqr") |>
+  flextable() |>
+  set_header_labels(cluster = "Grupo", variable = "Variavél", n = "Quantidade",
+                    median = "Mediana", iqr = "IIQ")
+```
+</br>
+O grupo 1 gastou mais com frutas
+
+### Ouro
+```{r}
+byf.shapiro(MntGoldProds ~cluster, data=dataset) #Os dados não são normais
+
+wilcox.test(MntGoldProds~ cluster, data = dataset) #A renda entre os dois gupos não é normal
+
+
+dataset |>
+  group_by(cluster) |>
+  get_summary_stats(MntGoldProds, type = "median_iqr") |>
+  flextable() |>
+  set_header_labels(cluster = "Grupo", variable = "Variavél", n = "Quantidade",
+                    median = "Mediana", iqr = "IIQ")
+```
+</br>
+O grupo 1 gastou mais com ouro
+
+
+###Disclaimer
+Uma vantagem de se utilizar a mediana é que ela é resistente a valores discrepantes(muito altos ou muito baixos). Ou seja, mesmos salários absurdamente elevados ou pequenos, pouco afetam análise. Além disso, a mesmo já sendo observada a diferença de salário entre os grupos. O marketing tem ideia de um valor que eles possam oferecer para os públicos diferentes.
+
+##Eles vão me atender?
+
+Tá, ok. Mas eles vão responder à mensagem? Vão atender ao telefone. Vão fechar a porta na nossa cara? Mesmo com o costume de receber não, o marketing quer evitar a decepção. Então olharam para mim, no fundo dos olhos e perguntaram: "Tem diferença entre os grupos em relação nossas promoções?"
+
+Vamos. Nesse tipo de situação devemos utilizar o teste de chi-quadrado. Ele analise se as chances de algo acontecer é ao caso, ou está ligada a alguma categoria. No nosso caso, é a resposta a campanha.
+
+
+```{r}
+tbl <- xtabs(~ Response + cluster, data = dataset)
+summary(tbl)
+proportions(tbl, "cluster")
+```
+</br>
+
+Apesar o teste indicar que há uma dependência entre o grupo e a probabilidade de atender. Sendo bem sincero com o marketing… A propaganda deles deve ser bem chata. Pois ambos o público tem uma baixa taxa de resposta.
+
+
+##Conclusões
+
+A Partir do R não só penas treinamos um modelo estatístico, como também ajudar nossos colegas de trabalha a vender de forma diferenciada para cada público, e deve melhor suas técnicas de persuasão.
+
+Até a próxima!
+
+

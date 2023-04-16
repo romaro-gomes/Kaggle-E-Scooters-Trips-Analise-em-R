@@ -1,0 +1,6 @@
+"0","data |>"
+"0","  group_by(Vendor) |>"
+"0","   get_summary_stats(Trip.Duration, type = ""median_iqr"") |>"
+"0","  flextable() |>"
+"0","  set_header_labels(Vendor = ""Vendor"", variable = ""Variable"", n = ""N"","
+"0","                    median = ""Median"", iqr = ""IQR"")"

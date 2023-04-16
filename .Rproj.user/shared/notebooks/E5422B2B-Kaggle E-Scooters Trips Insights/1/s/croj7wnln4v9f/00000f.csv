@@ -1,0 +1,8 @@
+"0","mean_duration= data |>"
+"0","   ggplot(aes(x=Vendor, y=Trip.Duration, fill=Vendor)) + "
+"0","   geom_boxplot(outlier.shape = NA) +"
+"0","   labs(title = ""Average trip duration for scooter each vendor"","
+"0","        subtitle =""Without Outliers"""
+"0","         ) +"
+"0","   coord_cartesian(ylim = quantile(data$Trip.Duration, c(0.1, 0.92)))"
+"0","mean_duration + scale_fill_brewer(palette =""Dark2"" )"
